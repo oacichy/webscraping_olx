@@ -1,0 +1,128 @@
+import pandas as pd
+import re
+from datetime import datetime
+import numpy as np
+
+def clean_price(price_str):
+    # Remove all non-digit characters except spaces (for thousand separators)
+    num_str = re.sub(r'[^\d\s]', '', price_str)
+    
+    # Remove all whitespace (handles thousand separators)
+    num_str = num_str.replace(' ', '')
+    
+    # Convert to float (or int if you prefer)
+    try:
+        return float(num_str)
+    except ValueError:
+        return None  # or np.nan if you prefer
+    
+    
+def clean_size(size_str):
+    # Extract numbers with comma as decimal separator
+    match = re.search(r'(\d+)[,.]?(\d*)', size_str.replace(' ', ''))
+    
+    if match:
+        whole_part = match.group(1)
+        decimal_part = match.group(2) if match.group(2) else '0'
+        num_str = f"{whole_part}.{decimal_part}"
+        try:
+            return float(num_str)
+        except ValueError:
+            return None
+    return None
+
+
+month_map = {
+    'stycznia': '01',
+    'lutego': '02',
+    'marca': '03',
+    'kwietnia': '04',
+    'maja': '05',
+    'czerwca': '06',
+    'lipca': '07',
+    'sierpnia': '08',
+    'września': '09',
+    'października': '10',
+    'listopada': '11',
+    'grudnia': '12'
+}
+
+def parse_polish_date(date_str):
+    # Handle "Dzisiaj" case
+    if 'Dzisiaj' in date_str:
+        return datetime.now().date()
+    
+    # Handle normal date format
+    for month_pl, month_num in month_map.items():
+        if month_pl in date_str:
+            # Replace Polish month with number
+            date_str = date_str.replace(month_pl, month_num)
+            # Parse the date (day month year)
+            try:
+                return datetime.strptime(date_str, '%d %m %Y').date()
+            except ValueError:
+                continue
+    return pd.NaT  # Return Not-a-Time for unparseable dates
+
+def extract_rooms(title):
+    # First check for studio apartments
+    if re.search(r'(?i)kawalerka|studio|apartament stud', title):
+        return 1
+    
+    # Room patterns
+    room_patterns = [
+        r'(?i)(\d+)[- ]pokojowe',
+        r'(?i)(\d+)pok(?!m)',
+        r'(?i)(\d+)[-/ ]pok(?:ój|oje)?',
+        r'(?i)(\d+)\s*poko[jm]e\b',
+        r'(?i)\[(\d+)[/ ]\d+\s*poko[jm]e\]',
+        r'(?i)pokoi?:?\s*(\d+)',
+        r'(?i)(\d+)\s*-\s*pok',
+        r'(?i)(\d+)\s*sypialn',
+        r'(?i)mieszkanie\s*(\d+)\s*',
+        r'(?i)apartament\s*(\d+)\s*'
+    ]
+    
+    for pattern in room_patterns:
+        match = re.search(pattern, title)
+        if match:
+            rooms = int(match.group(1))
+            return rooms if rooms <= 6 else np.nan
+    
+    return np.nan
+
+def remove_emoji(text):
+    emoji_pattern = re.compile("["
+        u"\U0001F600-\U0001F64F"  # emoticons
+        u"\U0001F300-\U0001F5FF"  # symbols & pictographs
+        u"\U0001F680-\U0001F6FF"  # transport & map symbols
+        u"\U0001F1E0-\U0001F1FF"  # flags (iOS)
+        u"\U00002500-\U00002BEF"  # Chinese/Japanese/Korean characters
+        u"\U00002702-\U000027B0"
+        u"\U00002702-\U000027B0"
+        u"\U000024C2-\U0001F251"
+        u"\U0001f926-\U0001f937"
+        u"\U00010000-\U0010ffff"
+        u"\u2640-\u2642" 
+        u"\u2600-\u2B55"
+        u"\u200d"
+        u"\u23cf"
+        u"\u23e9"
+        u"\u231a"
+        u"\ufe0f"  # variation selector
+        u"\u3030"
+                           "]+", flags=re.UNICODE)
+    return emoji_pattern.sub(r'', text)
+
+df = pd.read_csv("olx_mieszkania_wlkp_all.csv")
+df['Price'] = df['Price'].apply(clean_price)
+df['Size'] = df['Size'].apply(clean_size)
+df[['City', 'Neighbourhood']] = df['Neighbourhood'].str.split(', ', expand=True, n=1)
+df['Date_Posted'] = df['Date Posted'].apply(parse_polish_date)
+df.drop('Date Posted', axis=1, inplace=True)
+df['Rooms'] = df['Title'].apply(extract_rooms)
+df['Rooms'] = pd.to_numeric(df['Rooms'], errors='coerce').astype('Int64')
+df.drop('Price Segment', axis=1, inplace=True)
+df['Title'] = df['Title'].apply(lambda x: remove_emoji(str(x)))
+
+df.to_csv('processed_olx_wlkp.csv', index=False, encoding='utf-8')
